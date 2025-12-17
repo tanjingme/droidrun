@@ -79,7 +79,7 @@ DroidRun 的高效性源于其 **Portal** 机制。通过在 Android 端实现�
 
 ## 说明
 上述文档是由google antigravity使用Gemini3 pro(High) Planning模式通过如下prompt生成的。
-Prompt1:请你阅读Readme.md然后选择性的分析本目录下的源码文件，搞清楚LLM providers(OpenAI, Anthropic, Gemini, Ollama, DeepSeek) 是如何与Open-DroidRun 框架进行交互的，我是一位大模型算法工程师，同时也是一位prompt 工程师，知道LLM和VLM的推理过程，现在想着知道大模型的推理结果tokens 是如何变成手机上的操作的。请把解释过程写入markdown文件当中。请使用中文进行解释！你还需要将所用到的prompt模板按照功能列出来！
+Prompt1:请你阅读Readme.md然后选择性的分析本目录下的源码文件，搞清楚LLM providers(OpenAI, Anthropic, Gemini, Ollama, DeepSeek) 是如何与DroidRun 框架进行交互的，我是一位大模型算法工程师，同时也是一位prompt 工程师，知道LLM和VLM的推理过程，现在想着知道大模型的推理结果tokens 是如何变成手机上的操作的。请把解释过程写入markdown文件当中。请使用中文进行解释！你还需要将所用到的prompt模板按照功能列出来！
 Prompt2:你需要补充，交互时的应用的位置操作是如何映射的？
 Prompt3:你需要补充“当前的 UI 树”的获取过程，最好指出代码！
 Prompt4:我现在不懂portal_client.py 中的shell "content query" 命令为什么起作用！
