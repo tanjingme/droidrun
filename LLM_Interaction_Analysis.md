@@ -28,40 +28,34 @@ DroidRun 并不直接为每个 LLM Provider 编写原生 HTTP 请求代码，而
 *   **输出**: XML 风格的文本，包含 `<thought>`, `<plan>` 等标签。
 *   **传递**: 提取出的当前步骤（Subgoal）被传递给 Executor。
 #### 阶段二：UI 树获取过程 (Current UI Tree Retrieval)
-DroidRun 并非直接使用原生 ADB (`adb shell uiautomator dump`)，而是通过一个安装在手机上的辅助 App (**Portal**) 来获取高性能的 UI 状态。这个过程封装在 `droidrun/tools/portal_client.py` 中。
-*   **核心类**: `PortalClient` (在 `droidrun/tools/portal_client.py`)
-*   **通信方式**:
-    1.  **TCP 优先**: 尝试建立 ADB Port Forwarding (默认端口 8080)，通过 HTTP 请求直接与手机上的 Portal Server 通信。
-    2.  **Content Provider 降级**: 如果 TCP 失败，使用 `adb shell content query ...` 通过 Android Content Provider 机制获取数据。
-*   **调用链路**:
-    1.  `AdbTools.get_state()` 调用 `self.portal.get_state()`。
-    2.  `PortalClient.get_state()` 判断使用 TCP (`_get_state_tcp`) 还是 Content Provider (`_get_state_content_provider`)。
-    3.  **TCP 模式**: 发送 HTTP GET `/state_full`。
-    4.  **Content Provider 模式**: 执行 `content query --uri content://com.droidrun.portal/state_full`。
-    
-*   **返回数据**: 无论哪种方式，最终得到的是一个包含 `a11y_tree` (Accessibility Tree) 和 `phone_state` 的 JSON 对象。
-    ```python
-    # 示例结构
-    {
-        "a11y_tree": { ... },     # 完整的 UI 树结构
-        "phone_state": { ... }    # 当前 Activity, Package 等信息
-    }
-    ```
+DroidRun 并非直接使用原生 ADB (`adb shell uiautomator dump`)，而是通过一个安装在手机上的辅助 App (**Portal**) 来获取高性能的 UI 状态。
+*   **辅助 App (Portal)**: 源码参考 `droidrun/portal.py`。这是 DroidRun 专门编写的一个 Android APK (`com.droidrun.portal`)，需要安装在手机上并开启 **Accessibility Service**。
+*   **通信方式**: `droidrun/tools/portal_client.py` 实现了两种通信策略：
+    1.  **TCP 优先**: 尝试建立 ADB Port Forwarding (默认端口 8080)，类似于 HTTP 调用。
+    2.  **Content Provider 降级 (Content Query)**: 如果 TCP 失败，执行 ADB Shell 命令。
+**为什么 `adb shell content query` 起作用？**
+这涉及 Android 的底层机制。
+1.  `adb shell content` 是 Android 系统自带的命令行工具，用于与 App 的 `ContentProvider` 组件交互。
+2.  DroidRun 在 Portal App 中实现了一个 `ContentProvider`，并在 `AndroidManifest.xml` 中注册了 `content://com.droidrun.portal` 这个 Authority。
+3.  **数据流向**:
+    *   **Python 端**: 执行 `adb shell content query --uri content://com.droidrun.portal/state`
+    *   **Android 系统**: 收到命令，路由给 `com.droidrun.portal` 应用。
+    *   **Portal App 内部**:
+        *   `DroidrunAccessibilityService` (后台服务) 实时监听并维护当前的 Accessibility Node Tree。
+        *   `PortalContentProvider.query()` 被调用，它直接从 Service 中内存读取最新的 UI 树对象。
+        *   Provider 将 UI 树序列化为 JSON 字符串，包装在 `Cursor` 对象中返回。
+    *   **输出**: Python 端捕获到的标准输出就是一段包含了 UI 布局的 JSON 文本。
+这种方式比 `uiautomator dump` 快得多，因为它是内存直读，不需要重新触发系统层面的 UI 树快照生成。
 #### 阶段三：UI 元素映射与索引生成 (Visual Grounding 预处理)
-*   **组件**: `IndexedFormatter` (在 `droidrun/tools/formatters/indexed_formatter.py`)。
-*   **流程**: `IndexedFormatter` 遍历从 Portal 获取的 UI 树，为每个元素分配唯一数字索引 (Index)，并生成文本描述。
+*   **组件**: `IndexedFormatter`。
+*   **流程**: 遍历 UI 树，为每个元素分配唯一数字索引 (Index)，并生成文本描述。
     ```text
     1. TextView: "Settings" - bounds(0, 100, 200, 300)
     ```
 #### 阶段四：Executor 决策与执行
 *   **Prompt**: 使用 `executor/system.jinja2`。
 *   **推理**: LLM 决定点击哪个元素索引。
-    ```text
-    ### Action
-    {"action": "click", "index": 5}
-    ```
-*   **坐标还原**: `AdbTools.tap_by_index` (在 `droidrun/tools/adb.py`) 查表找到 `index=5` 的元素，计算中心点 `(x, y)`。
-*   **物理点击**: `self.device.click(x, y)` -> `adb shell input tap x y`。
+*   **坐标还原与点击**: `AdbTools.tap_by_index` 查表找到 `index` 对应元素，计算中心点坐标，调用 `adb shell input tap x y`。
 ## 4. Prompt 模板分析
 系统将 Prompt 模板按功能分类存储在 `droidrun/config/prompts/` 目录下。
 ### 4.1 Executor Prompt (执行器)
@@ -80,4 +74,4 @@ DroidRun 并非直接使用原生 ADB (`adb shell uiautomator dump`)，而是通
 *   **输出**: 要求输出 Python 代码块 (` ```python ... ``` `).
 *   **工具暴露**: "You can use the following functions: {{ tool_descriptions }}".
 ## 总结
-DroidRun 的高效性源于其 **Portal** 机制，它绕过了缓慢的原生 UI dump，通过 **TCP/ContentProvider** 快速获取 UI 状态。结合 **Manager-Executor** 架构和 **Index-based Visual Grounding**，实现了从 LLM Token 到精准手机操作的高效闭环。
+DroidRun 的高效性源于其 **Portal** 机制。通过在 Android 端实现自定义的 `ContentProvider`，它能够利用 `adb shell content` 指令快速从内存中导出 UI 状态，避开了原生 UIAutomator 的性能瓶颈。这一数据流既保证了 LLM 获取信息的实时性，也为后续的 Visual Grounding 提供了精确的数据基础。
